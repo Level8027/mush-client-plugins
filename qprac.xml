@@ -1,0 +1,475 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+
+<!DOCTYPE muclient [
+   <!ENTITY scholar "false" > 
+]>
+
+<!DOCTYPE muclient>
+<!-- $Id$ -->
+
+<muclient>
+<plugin
+   name="qprac"
+   author="Renoir"
+   id="5b47042f0467547498688cfd"
+   language="Lua"
+   purpose="Provide the best attack/spell for the current class/tier/level"
+   save_state="y"
+   date_written="2016-06-28 00:10:00"
+   requires="4.73"
+   version="0.96"
+   >
+<description trim="y">
+<![CDATA[
+                        Qprac v0.96
+         Configuration:
+
+     qprac set scholar: This will set that you're looking at 95
+                        as fully practiced. Only needed once.
+
+    Available Commands:
+
+            qprac help: Shows detailed help documentation on how to use
+                        these commands.
+
+                qspell: Gets all unpracticed spells up to your 
+                        current level, then shows the current queue.
+
+       qspell category: gets all unpracticed spells of the category up to
+                        your current level, then shows the current queue.
+
+            qprac list: Shows all spells currently in queue. Each entry
+                        has a lists of buttons. + and - move the spell up
+                        and down in the queue, and help and show send help
+                        and showspell respectively.
+
+    qprac up spellname: Moves the spell up in the queue.
+                        Called automatically by clicking [+]
+
+  qprac down spellname: Moves the spell down in the queue.
+                        Called automatically by clicking [-]
+
+qprac remove spellname: Removes the spell from the queue.
+                        Called automatically by clicking [x]
+
+           qprac clear: Clears the queue to practice
+
+            qprac next: practices the next spell in the queue.
+
+             qprac all: batch sends practice full for each spell.
+
+    Additional Reading:
+
+          help qspells: A brief version of the spells command, with filters.
+
+           help skills: Contains the list of available categories usable with
+                        qspell.
+]]>
+</description>
+</plugin>
+
+
+<!--  Get our standard constants -->
+
+<include name="constants.lua"/>
+
+
+<triggers>
+  <trigger
+   enabled="y"
+   match="^Skill/Spell List - Brief Version:$"
+   regexp="y"
+   send_to="12"
+   sequence="100"
+   omit_from_output="n"
+   name="start_qspell"
+   script="start_process"
+  >
+  </trigger>
+  <trigger
+   enabled="n"
+   match="(.*)"
+   regexp="y"
+   sequence="101"
+   omit_from_output="n"
+   name="process_qspell"
+   script="process_qspell"
+  ></trigger>
+  <trigger
+   enabled="y"
+   match="^End of list\.$"
+   regexp="y"
+   send_to="12"
+   sequence="100"
+   omit_from_output="n"
+   name="finish_qspell"
+   script="end_process"
+  >
+  </trigger>
+  <trigger
+   enabled="y"
+   match="^To see all skills/spells for your class, use 'allspells \<class\>'$"
+   regexp="y"
+   sequence="100"
+   name="display_qspell"
+   omit_from_output="y"
+  ></trigger>
+</triggers>
+
+<aliases>
+<alias
+   match="^qpract?( help)? .*$"
+   enabled="y"
+   regexp="y"
+   sequence="101"
+   ignore_case="y"
+   script="qprac_help"
+></alias>
+<alias
+   match="^qpract? up (?P<spell>.*)$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="move_up_spell"
+></alias>
+<alias
+   match="^qpract? down (?P<spell>.*)$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="move_down_spell"
+></alias>
+<alias
+   match="^qpract? remove (?P<spell>.*)$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="remove_spell"
+></alias>
+<alias
+   match="^qpract? clear$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="remove_all"
+></alias>
+<alias
+   match="^qpract? list$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="display_qspell_list"
+></alias>
+<alias
+   match="^qpract? next$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="qprac_next"
+></alias>
+<alias
+   match="^qpract? all$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="qprac_all"
+></alias>
+<alias
+   match="^qpract?( set)? scholar$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="toggle_scholar"
+></alias>
+<alias
+   match="^qspell( [a-zA-Z]*)?$"
+   enabled="y"
+   regexp="y"
+   sequence="100"
+   ignore_case="y"
+   script="find_spells"
+></alias>
+</aliases>
+
+<script>
+<![CDATA[
+
+function _gmcp(target)
+    res, gmcparg = CallPlugin( "3e7dedbe37e44942dd46d264", "gmcpval", target)
+    return gmcparg
+end
+
+scholar = true
+spell_name_fg = "white"
+spell_name_bg = "black"
+spell_remove_fg = "lightred"
+spell_remove_bg = spell_name_bg
+spell_show_fg = "lightblue"
+spell_show_bg = spell_name_bg
+
+help_bg = "black"
+help_name_fg = "lightgreen"
+help_general_fg = "white"
+
+list = {}
+
+function qprac_help()
+    ColourNote(help_name_fg, help_bg, "                        Qprac v0.96")
+
+    ColourTell(help_name_fg, help_bg, "         Configuration")
+    ColourNote(help_general_fg, help_bg, ":")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "     qprac set scholar")
+    ColourNote(help_general_fg, help_bg, ": This will set that you're looking at 95")
+    ColourNote(help_general_fg, help_bg, "                        as fully practiced. Only needed once.")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "    Available Commands")
+    ColourNote(help_general_fg, help_bg, ":")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "            qprac help")
+    ColourNote(help_general_fg, help_bg, ": Shows detailed help documentation on how to use")
+    ColourNote(help_general_fg, help_bg, "                        these commands.")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "                qspell")
+    ColourNote(help_general_fg, help_bg, ": Gets all unpracticed spells up to your ")
+    ColourNote(help_general_fg, help_bg, "                        current level, then shows the current queue")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "       qspell category")
+    ColourNote(help_general_fg, help_bg, ": gets all unpracticed spells of the category up to")
+    ColourNote(help_general_fg, help_bg, "                        your current level, then shows the current queue.")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "            qprac list")
+    ColourNote(help_general_fg, help_bg, ": Shows all spells currently in queue. Each entry")
+    ColourNote(help_general_fg, help_bg, "                        has a lists of buttons. + and - move the spell up")
+    ColourNote(help_general_fg, help_bg, "                        and down in the queue, and help and show send help")
+    ColourNote(help_general_fg, help_bg, "                        and showspell respectively.")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "    qprac up spellname")
+    ColourNote(help_general_fg, help_bg, ": Moves the spell up in the queue.")
+    ColourNote(help_general_fg, help_bg, "                        Called automatically by clicking [+]")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "  qprac down spellname")
+    ColourNote(help_general_fg, help_bg, ": Moves the spell down in the queue.")
+    ColourNote(help_general_fg, help_bg, "                        Called automatically by clicking [-]")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "qprac remove spellname")
+    ColourNote(help_general_fg, help_bg, ": Removes the spell from the queue.")
+    ColourNote(help_general_fg, help_bg, "                        Called automatically by clicking [x]")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "           qprac clear")
+    ColourNote(help_general_fg, help_bg, ": Clears the queue to practice")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "            qprac next")
+    ColourNote(help_general_fg, help_bg, ": practices the next spell in the queue.")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "             qprac all")
+    ColourNote(help_general_fg, help_bg, ": batch sends practice full for each spell.")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "    Additional Reading")
+    ColourNote(help_general_fg, help_bg, ":")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "          ")
+    Hyperlink("help qspells", "help qspells", "Display help qspells", help_name_fg, help_bg)
+    ColourNote(help_general_fg, help_bg, ": A brief version of the spells command, with filters.")
+
+    Note("")
+
+    ColourTell(help_name_fg, help_bg, "           ")
+    Hyperlink("help skills", "help skills", "Display help skills", help_name_fg, help_bg)
+    ColourNote(help_general_fg, help_bg, ": Contains the list of available categories usable with")
+    ColourNote(help_general_fg, help_bg, "                        qspell.")
+
+
+end
+
+function qprac_next()
+    if #list > 0 then
+        local head = table.remove(list, 1)
+        Send("practice "..head.." full")
+    else
+        ColourNote(spell_show_fg, spell_show_bg, "There are no remaining spells in queue.")
+    end
+end
+
+function qprac_all()
+    if #list > 0 then
+        for i,v in ipairs(list) do
+            Send("practice "..v.." full")
+        end
+        list = {}
+    else
+        ColourNote(spell_show_fg, spell_show_bg, "There are no remaining spells in queue.")
+    end
+end
+
+function toggle_scholar(name, line, wildcards)
+    if scholar then
+        ColourNote(spell_show_fg, spell_show_bg, "Do not have the Scholar Wish.")
+        scholar = false
+    else
+        ColourNote(spell_show_fg, spell_show_bg, "Have the Scholar Wish.")
+        scholar = true
+    end
+end
+
+function find_spells(alias, line, wildcards)
+    local level  = tonumber(_gmcp("char.status.level"))
+    local category = wildcards[1]
+    local prac = scholar and 94 or 84
+
+    SendNoEcho("qspell 1 "..level..category.." 0 "..prac)
+end
+
+function remove_all(trigger, line, wildcards)
+    list = {}
+    ColourNote(spell_name_fg, spell_name_bg, "Cleared the list of spells.")
+end
+
+function move_up_spell(trigger, line, wildcards)
+    local location = 0
+    for i,v in ipairs(list) do
+        if v == wildcards.spell then
+            location = i
+        end
+    end
+    if location > 1 then
+        table.insert(list, location - 1, table.remove(list, location))
+        ColourNote(spell_name_fg, spell_name_bg, wildcards.spell .. " has been moved up in the queue.")
+    elseif location == 1 then
+        ColourNote(spell_name_fg, spell_name_bg, wildcards.spell .. " is the first item aready.")
+    else
+        ColourNote(spell_name_fg, spell_name_bg, wildcards.spell .. " is not in the queue.")
+    end
+end
+
+function move_down_spell(trigger, line, wildcards)
+    local new_list = {}
+    for i,v in ipairs(list) do
+        if v == wildcards.spell then
+            location = i
+        end
+    end
+    if location > 0 and location ~= #list then
+        table.insert(list, location + 1, table.remove(list, location))
+        ColourNote(spell_name_fg, spell_name_bg, wildcards.spell .. " has been moved down in the queue.")
+    elseif location == #list then
+        ColourNote(spell_name_fg, spell_name_bg, wildcards.spell .. " is the last item aready.")
+    else
+        ColourNote(spell_name_fg, spell_name_bg, wildcards.spell .. " is not in the queue.")
+    end
+
+    --ColourNote(spell_name_fg, spell_name_bg, wildcards.spell.." has been removed.")
+end
+
+function remove_spell(trigger, line, wildcards)
+    local new_list = {}
+    for i,v in ipairs(list) do
+        if v ~= wildcards.spell then
+            new_list[#new_list+1] = v
+        end
+    end
+    list = new_list
+    ColourNote(spell_name_fg, spell_name_bg, wildcards.spell.." has been removed.")
+end
+
+function start_process()
+    list = {}
+    EnableTrigger("process_qspell", 1)
+    DeleteLines(1)
+
+    ColourNote(spell_name_fg, spell_name_bg, "Found the following spells and added to queue:")
+end
+
+function process_qspell(trigger, line, wildcards)
+    -- Note(wildcards[1])
+    DeleteLines(1)
+    local spell = wildcards[1]:gsub("^%s+", ""):gsub("%s+$", "")
+    for i,v in ipairs(list) do
+        if v == spell then
+            return nil
+        end
+    end
+    list[#list+1] = spell
+    display_spell(spell)
+end
+
+function end_process()
+      EnableTrigger("process_qspell", 0)
+      DeleteLines(1)
+      ColourNote(spell_name_fg, spell_name_bg, "End of list.")
+end
+
+function display_qspell_list(trigger, line, wildcards)
+    DeleteLines(1)
+    for i,spell in ipairs(list) do
+        display_spell(spell)
+    end
+end
+
+function display_spell(spell_name)
+    Hyperlink("qprac up "..spell_name, "[+] ", "Move "..spell_name.." up", spell_remove_fg, spell_remove_bg)
+    Hyperlink("qprac down "..spell_name, "[-] ", "Remove "..spell_name.." down", spell_remove_fg, spell_remove_bg)
+    Hyperlink("qprac remove "..spell_name, "[x] ", "Remove "..spell_name, spell_remove_fg, spell_remove_bg)
+    Hyperlink("showspell "..spell_name, "[show] ", "Show Spell "..spell_name, spell_show_fg, spell_show_bg)
+    Hyperlink("help "..spell_name, "[help] ", "help "..spell_name, spell_show_fg, spell_show_bg)
+    ColourTell(spell_name_fg, spell_name_bg, spell_name)
+    Note()
+
+end
+
+
+function OnPluginInstall()
+    if GetVariable("scholar") == 'true' then
+        scholar = true
+    else
+        scholar = false
+    end
+end -- OnPluginConnect
+
+function OnPluginSaveState()
+    if scholar then
+        SetVariable("scholar", "true")
+    else
+        SetVariable("scholar", "false")
+    end
+end -- OnPluginSaveState
+]]>
+</script>
+
+</muclient>
